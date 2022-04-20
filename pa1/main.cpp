@@ -90,33 +90,41 @@ Eigen::Matrix4f get_model_matrix(float rotation_angle)
 Eigen::Matrix4f get_projection_matrix(float eye_fov, float aspect_ratio,
                                       float zNear, float zFar)
 {
-    // Students will implement this function
 
     Eigen::Matrix4f projection = Eigen::Matrix4f::Identity();
-    float cota = eye_fov / 180.0f * 3.1415926f * 0.5f ;
-    cota = 1.f/ tanf(cota);
-    //右手坐标系
-    float zD = zNear-zFar;
-    projection <<   -cota/aspect_ratio,0,0,0,
-                    0,-cota,0,0,
-                    0,0,(zFar+zNear)/zD,-2.0f*zFar*zNear/zD,
-                    0,0,1,0;
-    
-    //左手坐标系
-//    projection <<   cota/aspect_ratio,0,0,0,
-//                    0,cota,0,0,
-//                    0,0,(zFar+zNear)/(zFar-zNear),-2.0f*zFar*zNear/(zFar-zNear),
-//                    0,0,1,0;
-                    
-    // TODO: Implement this function
-    // Create the projection matrix for the given parameters.
-    // Then return it.
-//    projection <<   0.2,0,0,0,
-//                    0,0.2,0,0,
-//                    0,0,-0.5,0.5,
-//                    0,0,0,1;
+	Eigen::Matrix4f M_persp2ortho(4, 4);
+	Eigen::Matrix4f M_ortho_scale(4, 4);
+	Eigen::Matrix4f M_ortho_trans(4, 4);
+	//已更正
+	float angle = eye_fov * PI / 180.0; 
+	float height = zNear * tan(angle) * 2;
+	float width = height * aspect_ratio;
+
+	auto t = -zNear * tan(angle / 2);  // 上截面
+	auto r = t * aspect_ratio;  //右截面   
+	auto l = -r;  // 左截面
+	auto b = -t;  // 下截面
+	// 透视矩阵"挤压"
+	M_persp2ortho << zNear, 0, 0, 0,
+		0, zNear, 0, 0,
+		0, 0, zNear + zFar, -zNear * zFar,
+		0, 0, 1, 0;
+	// 正交矩阵-缩放
+	M_ortho_scale << 2 / (r - l), 0, 0, 0,
+		0, 2 / (t - b), 0, 0,
+		0, 0, 2 / (zNear - zFar), 0,
+		0, 0, 0, 1;
+	// 正交矩阵-平移
+	M_ortho_trans << 1, 0, 0, -(r + l) / 2,
+		0, 1, 0, -(t + b) / 2,
+		0, 0, 1, -(zNear + zFar) / 2,
+		0, 0, 0, 1;
+	Eigen::Matrix4f M_ortho = M_ortho_scale * M_ortho_trans;
+	projection = M_ortho * M_persp2ortho * projection;
+
     return projection;
 }
+
 
 int main(int argc, const char** argv)
 {
@@ -134,12 +142,15 @@ int main(int argc, const char** argv)
             return 0;
     }
 
-    rst::rasterizer r(700, 700);
+	//模拟图形管线
+    //定义光栅化器的实例
+	rst::rasterizer r(700, 700);
 
     Eigen::Vector3f eye_pos = {0, 0, 5};
 
     std::vector<Eigen::Vector3f> pos{{2, 0, 0}, {0, 2, 0}, {-2, 0, 0}};
 
+	//顶点索引
     std::vector<Eigen::Vector3i> ind{{0, 1, 2}};
 
     auto pos_id = r.load_positions(pos);
@@ -151,8 +162,8 @@ int main(int argc, const char** argv)
     if (command_line) {
         r.clear(rst::Buffers::Color | rst::Buffers::Depth);
 
-        r.set_model(get_model_matrix(angle));
         r.set_view(get_view_matrix(eye_pos));
+        r.set_model(get_model_matrix(angle));
         r.set_projection(get_projection_matrix(45, 1, 0.1, 50));
 
         r.draw(pos_id, ind_id, rst::Primitive::Triangle);

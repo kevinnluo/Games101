@@ -190,17 +190,17 @@ void rst::rasterizer::rasterize_wireframe(const Triangle& t)
     draw_line(t.c(), t.b());
     draw_line(t.b(), t.a());
 }
-
+//将内部的模型矩阵作为参数传递给光栅化器。
 void rst::rasterizer::set_model(const Eigen::Matrix4f& m)
 {
     model = m;
 }
-
+//将视图变换矩阵设为内部视图矩阵。
 void rst::rasterizer::set_view(const Eigen::Matrix4f& v)
 {
     view = v;
 }
-
+//将内部的投影矩阵设为给定矩阵p，并传递给光栅化器
 void rst::rasterizer::set_projection(const Eigen::Matrix4f& p)
 {
     projection = p;
@@ -228,7 +228,7 @@ int rst::rasterizer::get_index(int x, int y)
 {
     return (height-y)*width + x;
 }
-
+//将屏幕像素点(x, y) 设为(r, g, b) 的颜色，并写入相应的帧缓冲区位置。
 void rst::rasterizer::set_pixel(const Eigen::Vector3f& point, const Eigen::Vector3f& color)
 {
     //old index: auto ind = point.y() + point.x() * width;
