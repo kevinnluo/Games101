@@ -40,6 +40,25 @@ auto to_vec4(const Eigen::Vector3f& v3, float w = 1.0f)
 }
 
 
+static bool insideTriangle(double x, double y, const Vector3f* _v)
+{   
+    // TODO : Implement this function to check if the point (x, y) is inside the triangle represented by _v[0], _v[1], _v[2]
+	Eigen::Vector2f p;
+	p << x, y;
+
+	Eigen::Vector2f AB = _v[1].head(2) - _v[0].head(2);
+	Eigen::Vector2f BC = _v[2].head(2) - _v[1].head(2);
+	Eigen::Vector2f CA = _v[0].head(2) - _v[2].head(2);
+
+	Eigen::Vector2f AP = p - _v[0].head(2);
+	Eigen::Vector2f BP = p - _v[1].head(2);
+	Eigen::Vector2f CP = p - _v[2].head(2);
+	
+	// 判断每个z坐标是否统一
+	return AB[0] * AP[1] - AB[1] * AP[0] > 0 
+		&& BC[0] * BP[1] - BC[1] * BP[0] > 0
+		&& CA[0] * CP[1] - CA[1] * CP[0] > 0;
+}
 
 
 static std::tuple<float, float, float> computeBarycentric2D(float x, float y, const Vector3f* v)
@@ -50,14 +69,6 @@ static std::tuple<float, float, float> computeBarycentric2D(float x, float y, co
     return {c1,c2,c3};
 }
 
-static bool insideTriangle(int x, int y, const Vector3f* _v)
-{
-    // TODO : Implement this function to check if the point (x, y) is inside the triangle represented by _v[0], _v[1], _v[2]
-    //Vector3f p(x,y,)
-    auto[alpha, beta, gamma] = computeBarycentric2D(x, y, _v);
-    return alpha >=0 && beta >=0 && gamma >=0;
-    //return false;
-}
 void rst::rasterizer::draw(pos_buf_id pos_buffer, ind_buf_id ind_buffer, col_buf_id col_buffer, Primitive type)
 {
     auto& buf = pos_buf[pos_buffer.pos_id];
@@ -106,59 +117,102 @@ void rst::rasterizer::draw(pos_buf_id pos_buffer, ind_buf_id ind_buffer, col_buf
         rasterize_triangle(t);
     }
 }
-void* rst::rasterizer::data()
-{
-    return frame_buf.data();
-}
-//
+
+//Screen space rasterization
 //Screen space rasterization
 void rst::rasterizer::rasterize_triangle(const Triangle& t) {
-    auto vs = t.toVector4();
-    int left = width;
-    int right = 0;
-    int down = height;
-    int up =0;
-    for (Vector4f v : vs) {
-        if(v.x() < left) left = std::max(v.x(),0.0f);
-        if(v.x() > right) right = std::min(v.x(),(float)width);
-        if(v.y() < down) down = std::max(v.y(),0.0f);
-        if(v.y() > up) up = std::min(v.y(), (float)height);
-    }
-    for(int y_ = down;y_<up;++y_)
-    {
-        for(int x_ = left;x_<right;++x_)
-        {
-            int coverageCount = 0;
-            //anti aliasing
-            
-            for(int xA=0;xA<AA;++xA)
-            {
-                for (int yA=0; yA<AA; ++yA) {
-                    float x = x_ + 1.0f/AA*xA + 0.5f/AA;
-                    float y = y_ + 1.0f/AA*yA + 0.5f/AA;
-                    auto[alpha, beta, gamma] = computeBarycentric2D(x, y, t.v);
-                    if (alpha >=0 && beta >=0 && gamma >=0) {
-                        
-                        float oldz = get_depth(x, y);
-                        float newDepth = alpha * t.v[0].z() + beta * t.v[1].z() * gamma * t.v[2].z();
-                        if(newDepth < oldz){
-                            ++coverageCount;
-                            set_depth(x, y, newDepth);
-                            //set_pixel(x, y,t.getColor());
-                        }
-                        
-                    }
-                }
-            }
-            
-            if(coverageCount > 0)
-            {
-                Eigen::Vector3f color = t.getColor();
-                float coverage = 1.0f/(AA*AA) * coverageCount;
-                set_pixel(x_, y_,color*coverage);
-            }
-        }
-    }
+    auto v = t.toVector4();
+
+	// bounding box
+	float min_x = std::min(v[0][0], std::min(v[1][0], v[2][0]));
+    float max_x = std::max(v[0][0], std::max(v[1][0], v[2][0]));
+	float min_y = std::min(v[0][1], std::min(v[1][1], v[2][1]));
+	float max_y = std::max(v[0][1], std::max(v[1][1], v[2][1]));
+
+	min_x = (int)std::floor(min_x);
+	max_x = (int)std::ceil(max_x);
+	min_y = (int)std::floor(min_y);
+	max_y = (int)std::ceil(max_y);
+
+	bool MSAA = false;
+	//MSAA 4X
+	if (MSAA) {
+		// 格子里的细分四个小点坐标
+		std::vector<Eigen::Vector2f> pos
+		{
+			{0.25,0.25},
+			{0.75,0.25},
+			{0.25,0.75},
+			{0.75,0.75},
+		};
+		for (int x = min_x; x <= max_x; x++) {
+			for (int y = min_y; y <= max_y; y++) {
+				// 记录最小深度
+				float minDepth = FLT_MAX;
+				// 四个小点中落入三角形中的点的个数
+				int count = 0;
+				// 对四个小点坐标进行判断 
+				for (int i = 0; i < 4; i++) {
+					// 小点是否在三角形内
+					if (insideTriangle((float)x + pos[i][0], (float)y + pos[i][1], t.v)) {
+						// 如果在，对深度z进行插值
+						auto tup = computeBarycentric2D((float)x + pos[i][0], (float)y + pos[i][1], t.v);
+						float alpha;
+						float beta;
+						float gamma;
+						std::tie(alpha, beta, gamma) = tup;
+						float w_reciprocal = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
+						float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
+						z_interpolated *= w_reciprocal;
+						minDepth = std::min(minDepth, z_interpolated);
+						count++;
+					}
+				}
+				if (count != 0) {
+					if (depth_buf[get_index(x, y)] > minDepth) {
+						Vector3f color = t.getColor() * count / 4.0;
+						Vector3f point(3);
+						point << (float)x, (float)y, minDepth;
+						// 替换深度
+						depth_buf[get_index(x, y)] = minDepth;
+						// 修改颜色
+						set_pixel(point, color);
+					}
+				}
+			}
+		}
+	}
+	else {
+		for (int x = min_x; x <= max_x; x++) {
+			for (int y = min_y; y <= max_y; y++) {
+				if (insideTriangle((float)x + 0.5, (float)y + 0.5, t.v)) {
+					auto tup = computeBarycentric2D((float)x + 0.5, (float)y + 0.5, t.v);
+					float alpha;
+					float beta;
+					float gamma;
+					std::tie(alpha, beta, gamma) = tup;
+					float w_reciprocal = 1.0 / (alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
+					float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
+					z_interpolated *= w_reciprocal;
+
+					if (depth_buf[get_index(x, y)] > z_interpolated) {
+						Vector3f color = t.getColor();
+						Vector3f point(3);
+						point << (float)x, (float)y, z_interpolated;
+						depth_buf[get_index(x, y)] = z_interpolated;
+						set_pixel(point, color);
+					}
+				}
+			}
+		}
+	}
+    // If so, use the following code to get the interpolated z value.
+    //auto[alpha, beta, gamma] = computeBarycentric2D(x, y, t.v);
+    //float w_reciprocal = 1.0/(alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
+    //float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
+    //z_interpolated *= w_reciprocal;
+	
+    // TODO : set the current pixel (use the set_pixel function) to the color of the triangle (use getColor function) if it should be painted.
 }
 
 void rst::rasterizer::set_model(const Eigen::Matrix4f& m)
@@ -191,7 +245,7 @@ void rst::rasterizer::clear(rst::Buffers buff)
 rst::rasterizer::rasterizer(int w, int h) : width(w), height(h)
 {
     frame_buf.resize(w * h);
-    depth_buf.resize(w * h*AA*AA);
+    depth_buf.resize(w * h);
 }
 
 int rst::rasterizer::get_index(int x, int y)
@@ -199,27 +253,12 @@ int rst::rasterizer::get_index(int x, int y)
     return (height-1-y)*width + x;
 }
 
-void rst::rasterizer::set_pixel(float x ,float y, const Eigen::Vector3f& color)
-{
-    auto ind = (height-1-y)*width + (x);
-    frame_buf[ind] = color;
-}
-
-void rst::rasterizer::set_depth(float x ,float y, float depth)
-{
-    auto ind = (height*AA-1-y*AA)*width*AA + (x*AA);
-    depth_buf[ind] = depth;
-
-}
-float rst::rasterizer::get_depth(float x, float y)
-{
-    auto ind = (height*AA-1-y*AA)*width*AA + (x*AA);
-    return depth_buf[ind];
-}
-
 void rst::rasterizer::set_pixel(const Eigen::Vector3f& point, const Eigen::Vector3f& color)
 {
-    set_pixel(point.x(), point.y(), color);
+    //old index: auto ind = point.y() + point.x() * width;
+    auto ind = (height-1-point.y())*width + point.x();
+    frame_buf[ind] = color;
+
 }
 
 // clang-format on
